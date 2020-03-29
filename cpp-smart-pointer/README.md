@@ -160,9 +160,133 @@ std::shared_ptr可以指定删除器的一个原因是其默认删除器不支�
 
 ### unique_ptr 用法
 
+unique_ptr，是用于取代c++98的auto_ptr的产物,在c++98的时候还没有移动语义(move semantics)的支持，
+因此对于auto_ptr的控制权转移的实现没有核心元素的支持,但是还是实现了auto_ptr的移动语义，
+这样带来的一些问题是拷贝构造函数和复制操作重载函数不够完美,具体体现就是把auto_ptr作为函数参数，
+传进去的时候控制权转移，转移到函数参数，当函数返回的时候并没有一个控制权移交的过程，所以过了函数调用则原先的auto_ptr已经失效了。
+在c++11当中有了移动语义，使用move()把unique_ptr传入函数，这样你就知道原先的unique_ptr已经失效了。
+移动语义本身就说明了这样的问题，比较坑爹的是标准描述是说对于move之后使用原来的内容是未定义行为，并非抛出异常，所以还是要靠人肉遵守游戏规则。
+再一个，auto_ptr不支持传入deleter，所以只能支持单对象(delete object)，而unique_ptr对数组类型有偏特化重载，并且还做了相应的优化，比如用[]访问相应元素等。
+
+unique_ptr 是一个独享所有权的智能指针，它提供了严格意义上的所有权，包括：
+
+* 拥有它指向的对象
+
+* 无法进行复制构造，无法进行复制赋值操作。即无法使两个unique_ptr指向同一个对象。但是可以进行移动构造和移动赋值操作
+
+* 保存指向某个对象的指针，当它本身被删除释放的时候，会使用给定的删除器释放它指向的对象
+
+ unique_ptr 可以实现如下功能：
+
+* 为动态申请的内存提供异常安全
+
+* 讲动态申请的内存所有权传递给某函数
+
+* 从某个函数返回动态申请内存的所有权
+
+* 在容器中保存指针
+
+* auto_ptr 应该具有的功能
+
+使用例子
+
+```c++
+unique_ptr<Test> fun()
+{
+    return unique_ptr<Test>(new Test("789"));
+}
+int main()
+{
+    unique_ptr<Test> ptest(new Test("123"));
+    unique_ptr<Test> ptest2(new Test("456"));
+    ptest->print();
+    ptest2 = std::move(ptest);//不能直接ptest2 = ptest
+    if(ptest == NULL)cout<<"ptest = NULL\n";
+    Test* p = ptest2.release();
+    p->print();
+    ptest.reset(p);
+    ptest->print();
+    ptest2 = fun(); //这里可以用=，因为使用了移动构造函数
+    ptest2->print();
+    return 0;
+}
+```
+
 ### weak_ptr 用法
+
+weak_ptr是用来解决shared_ptr相互引用时的死锁问题，如果说两个shared_ptr相互引用，那么这两个指针的引用计数永远不可能下降为0，
+资源永远不会释放。它是对对象的一种弱引用，不会增加对象的引用计数，和shared_ptr之间可以相互转化，shared_ptr可以直接赋值给它，
+它可以通过调用lock函数来获得shared_ptr。
+
+用法如下：
+
+```c++
+
+class B;
+class A
+{
+public:
+    shared_ptr<B> pb_;
+    ~A()
+    {
+        cout<<"A delete\n";
+    }
+};
+class B
+{
+public:
+    shared_ptr<A> pa_;
+    ~B()
+    {
+        cout<<"B delete\n";
+    }
+};
+ 
+void fun()
+{
+    shared_ptr<B> pb(new B());
+    shared_ptr<A> pa(new A());
+    pb->pa_ = pa;
+    pa->pb_ = pb;
+    cout<<pb.use_count()<<endl;
+    cout<<pa.use_count()<<endl;
+}
+ 
+int main()
+{
+    fun();
+    return 0;
+}
+```
+
+output：
+
+```
+2
+2
+```
+
+可以看到fun函数中pa ，pb之间互相引用，两个资源的引用计数为2，当要跳出函数时，智能指针pa，pb析构时两个资源引用计数会减一，
+但是两者引用计数还是为1，导致跳出函数时资源没有被释放（A B的析构函数没有被调用），如果把其中一个改为weak_ptr就可以了，
+我们把类A里面的shared_ptr<B> pb_; 改为weak_ptr<B> pb_; 运行结果如下，这样的话，资源B的引用开始就只有1，当pb析构时，
+B的计数变为0，B得到释放，B释放的同时也会使A的计数减一，同时pa析构时使A的计数减一，那么A的计数为0，A得到释放。
+
+output:
+
+```
+1
+2
+B delete
+A delete
+```
+
+注意的是我们不能通过weak_ptr直接访问对象的方法，比如B对象中有一个方法print(),我们不能这样访问，pa->pb_->print(); 
+英文pb_是一个weak_ptr，应该先把它转化为shared_ptr,如：shared_ptr<B> p = pa->pb_.lock(); p->print();
+
 参考：
 
 https://www.cnblogs.com/jiayayao/p/6128877.html
 
 https://blog.csdn.net/snail_hunan/article/details/43086189
+
+https://www.cnblogs.com/tenosdoit/p/3456704.html
